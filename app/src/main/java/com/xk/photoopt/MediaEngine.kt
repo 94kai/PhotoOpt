@@ -96,6 +96,7 @@ class MediaEngine(private val context: Context) {
                                     basic = basic.copy(sourceFormat = actual, kind = if (actual != null) "图片" else basic.kind)
                                     if (Files.exists(basic.copy(copyOriginal = true).destination(prefix).toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS))
                                         basic.copy(reason = "同名输出已存在，直接跳过，不读取原件内容", outputExists = true)
+                                    else if ((basic.sourceFormat ?: file.extension.lowercase()) in setOf("heic", "heif")) inspect(file, root)
                                     else if (hasLivePartner(file)) basic.copy(kind = if (basic.kind == "视频") "疑似实况视频" else "疑似实况图", reason = "同目录同名照片/视频，疑似配对；两者均跳过")
                                 else if (basic.kind != "视频" && (basic.sourceFormat ?: file.extension.lowercase()) !in setOf("jpg", "jpeg", "png", "webp"))
                                     basic.copy(reason = "${(basic.sourceFormat ?: file.extension).uppercase()} 暂不转码，保留原件")
@@ -159,7 +160,7 @@ class MediaEngine(private val context: Context) {
         val ext = MediaHeader.imageFormat(file) ?: file.extension.lowercase()
         var entry = MediaEntry(file.path, root.path, file.relativeTo(root).path, file.length(), file.lastModified(), sourceFormat = ext)
         if (ext in videoExtensions) return inspectVideo(entry)
-        if (ext !in setOf("jpg", "jpeg", "png", "webp")) return entry.copy(reason = "${ext.uppercase()} 暂不转码，保留原件")
+        if (ext !in setOf("jpg", "jpeg", "png", "webp", "heic", "heif")) return entry.copy(reason = "${ext.uppercase()} 暂不转码，保留原件")
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(file.path, bounds)
         check(bounds.outWidth > 0 && bounds.outHeight > 0) { "图片无法解码" }
@@ -167,6 +168,7 @@ class MediaEngine(private val context: Context) {
         entry = entry.copy(width = bounds.outWidth, height = bounds.outHeight,
             taken = exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL), hasGps = exif.latLong != null)
         if (exif.getAttribute(ExifInterface.TAG_USER_COMMENT)?.contains(MARKER) == true) return entry.copy(reason = "已有 PhotoOpt 标记")
+        if (ext in setOf("heic", "heif")) return entry.copy(kind = "HEIC / HEIF", reason = "HEIC / HEIF 可开启兼容模式转为普通图片", forceStaticAllowed = true)
         if (ext in setOf("png", "webp")) {
             if (isAnimated(file, ext)) return entry.copy(kind = "动图", reason = "动态 PNG / WebP 暂不转码")
             return entry
@@ -286,13 +288,25 @@ class MediaEngine(private val context: Context) {
         val source = File(entry.source)
         val maxEdge = if (quality.edge == 0) max(entry.width, entry.height) else quality.edge
         val ratio = minOf(1.0, maxEdge.toDouble() / max(entry.width, entry.height))
-        val desiredW = (entry.width * ratio).roundToInt().coerceAtLeast(1)
-        val desiredH = (entry.height * ratio).roundToInt().coerceAtLeast(1)
+        var desiredW = (entry.width * ratio).roundToInt().coerceAtLeast(1)
+        var desiredH = (entry.height * ratio).roundToInt().coerceAtLeast(1)
         var sample = 1
         while (entry.width / (sample * 2) >= desiredW && entry.height / (sample * 2) >= desiredH) sample *= 2
         // Bound full-resolution allocations, instead of letting a large panorama kill the entire batch.
         require(entry.width.toLong() / sample * (entry.height / sample) <= minOf(40_000_000L, Runtime.getRuntime().maxMemory() / 12)) { "图片像素过大，请选均衡或更省空间" }
-        val bitmap = BitmapFactory.decodeFile(source.path, BitmapFactory.Options().apply { inSampleSize = sample; inPreferredConfig = Bitmap.Config.ARGB_8888; if (entry.primaryOnly) inPreferredColorSpace = android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB) })
+        val heif = (entry.sourceFormat ?: source.extension.lowercase()) in setOf("heic", "heif")
+        val bitmap = if (heif) {
+            android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(source)) { decoder, info, _ ->
+                // ImageDecoder applies HEIF/EXIF orientation; write a normalized orientation below.
+                val factor = if (quality.edge == 0) 1.0 else minOf(1.0, quality.edge.toDouble() / max(info.size.width, info.size.height))
+                desiredW = (info.size.width * factor).roundToInt().coerceAtLeast(1)
+                desiredH = (info.size.height * factor).roundToInt().coerceAtLeast(1)
+                decoder.allocator = android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE
+                decoder.setTargetSize(desiredW, desiredH)
+                decoder.setTargetColorSpace(android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB))
+                decoder.setOnPartialImageListener { false }
+            }
+        } else BitmapFactory.decodeFile(source.path, BitmapFactory.Options().apply { inSampleSize = sample; inPreferredConfig = Bitmap.Config.ARGB_8888; if (entry.primaryOnly) inPreferredColorSpace = android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB) })
             ?: error("图片解码失败")
         try {
             if (android.os.Build.VERSION.SDK_INT >= 34) bitmap.setGainmap(null)
@@ -346,6 +360,7 @@ class MediaEngine(private val context: Context) {
         destExif.setAttribute(ExifInterface.TAG_IMAGE_LENGTH, desiredH.toString())
         destExif.setAttribute(ExifInterface.TAG_PIXEL_X_DIMENSION, desiredW.toString())
         destExif.setAttribute(ExifInterface.TAG_PIXEL_Y_DIMENSION, desiredH.toString())
+        if (heif) destExif.setAttribute(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL.toString())
         val previousComment = sourceExif.getAttribute(ExifInterface.TAG_USER_COMMENT).orEmpty()
         destExif.setAttribute(ExifInterface.TAG_USER_COMMENT, listOf(previousComment, "$MARKER; profile=${quality.name}; originalBytes=${entry.size}${if (entry.primaryOnly) "; primaryOnly=true; omitted=HDR,auxiliary-images${if (entry.stillOnly) "; liveStillOnly=true; motionRemoved=true${if (entry.forcedStatic) "; forcedStatic=true" else ""}" else ""}" else ""}").filter { it.isNotBlank() }.joinToString("\n"))
         destExif.saveAttributes()
@@ -355,7 +370,7 @@ class MediaEngine(private val context: Context) {
                 java.io.FileOutputStream(target, true).use { out -> input.copyTo(out) }
             }
         }
-        verifyImage(sourceExif, target, desiredW, desiredH, preserveXmp = !entry.primaryOnly)
+        verifyImage(sourceExif, target, desiredW, desiredH, preserveXmp = !entry.primaryOnly, normalizedOrientation = heif)
         if (entry.primaryOnly) {
             val layout = jpegLayout(target)
             check(layout.end == target.length()) { "静态小图仍含附加数据" }
@@ -378,7 +393,7 @@ class MediaEngine(private val context: Context) {
         }
     }
 
-    private fun verifyImage(original: ExifInterface, target: File, width: Int, height: Int, preserveXmp: Boolean = true) {
+    private fun verifyImage(original: ExifInterface, target: File, width: Int, height: Int, preserveXmp: Boolean = true, normalizedOrientation: Boolean = false) {
         val written = ExifInterface(target)
         val tags = listOf(ExifInterface.TAG_DATETIME_ORIGINAL, ExifInterface.TAG_DATETIME_DIGITIZED,
             ExifInterface.TAG_DATETIME, ExifInterface.TAG_OFFSET_TIME, ExifInterface.TAG_OFFSET_TIME_ORIGINAL,
@@ -386,7 +401,10 @@ class MediaEngine(private val context: Context) {
             ExifInterface.TAG_GPS_LATITUDE, ExifInterface.TAG_GPS_LATITUDE_REF,
             ExifInterface.TAG_GPS_LONGITUDE, ExifInterface.TAG_GPS_LONGITUDE_REF,
             ExifInterface.TAG_GPS_ALTITUDE, ExifInterface.TAG_GPS_ALTITUDE_REF, ExifInterface.TAG_ORIENTATION)
-        for (tag in tags) check(original.getAttribute(tag) == written.getAttribute(tag)) { "元数据校验不一致：$tag" }
+        for (tag in tags) {
+            if (normalizedOrientation && tag == ExifInterface.TAG_ORIENTATION) { check(written.getAttributeInt(tag, 0) == ExifInterface.ORIENTATION_NORMAL); continue }
+            check(original.getAttribute(tag) == written.getAttribute(tag)) { "元数据校验不一致：$tag" }
+        }
         check(written.getAttribute(ExifInterface.TAG_USER_COMMENT)?.contains(MARKER) == true) { "标记写入失败" }
         if (preserveXmp && original.getAttribute(ExifInterface.TAG_XMP) != null) check(original.getAttribute(ExifInterface.TAG_XMP) == written.getAttribute(ExifInterface.TAG_XMP)) { "XMP 校验不一致" }
         val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }

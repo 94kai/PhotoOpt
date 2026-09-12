@@ -20,7 +20,7 @@ val processingLimitations = listOf(
         ProcessingLimitation("压缩到多大",
             "照片长边最多 ${Quality.COMPACT.edge}，JPEG 质量 ${Quality.COMPACT.jpeg}。普通视频和 vivo 实况视频长边最多 ${Quality.COMPACT.videoEdge}，目标 ${Quality.COMPACT.bitrate / 1_000_000} Mbps，保留音频。部分 Google 单文件实况的视频原样保留。"),
         ProcessingLimitation("兼容模式",
-            "对能读取主图的部分不兼容图片，只提取主图压缩，动态和附加信息不保留。不是所有跳过项都能解决；仍不支持的格式可联系作者适配。"),
+            "HEIC / HEIF 及其他能读取主图的部分不兼容图片，可开启兼容模式转为普通 JPEG。只保留主图，尽量保留拍摄时间、位置，动态、深度和其他附加信息不保留。设备无法解码时仍会跳过或失败。不是所有跳过项都能解决；仍不支持的格式可联系作者适配。"),
         ProcessingLimitation("原件和小图",
             "原件不会自动删除，已有输出不覆盖。小文件或压缩后未变小的文件会复制并写入标记。确认备份与小图后再清理原件，才会释放空间。"),
         ProcessingLimitation("联系作者",

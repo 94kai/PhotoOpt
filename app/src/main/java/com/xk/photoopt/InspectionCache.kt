@@ -11,7 +11,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 
 /** Disposable metadata cache. Never stores output-existence, pairing, or transient read errors. */
 class InspectionCache(context: Context) : Closeable {
-    private val helper = object : SQLiteOpenHelper(context, File(context.cacheDir, "inspection-v5.db").path, null, 5) {
+    private val helper = object : SQLiteOpenHelper(context, File(context.cacheDir, "inspection-v5.db").path, null, 6) {
         override fun onCreate(db: SQLiteDatabase) {
             db.execSQL("CREATE TABLE inspection (source TEXT PRIMARY KEY, size INTEGER NOT NULL, modified INTEGER NOT NULL, entry TEXT NOT NULL, updated INTEGER NOT NULL)")
         }

@@ -874,6 +874,8 @@ private fun OriginalCleanupDialogs(vm: PhotoViewModel) {
         AlertDialog(onDismissRequest = vm::dismissCleanup, title = { Text(if (plan.files.isEmpty()) "暂无可清理原件" else "确认删除 ${plan.files.size} 个原文件？") }, text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("原件共 ${bytes(plan.size)}。检查范围是本次扫描的全部来源，不受文件勾选或隐藏状态影响。仅删除本机原件，保留小图和目录；删除不会进入相册回收站。", fontSize = 13.sp)
+                Text("每个目录会保留最新的一张图片；若为同名实况配对，照片和视频一起保留。优先按拍摄时间判断，没有则按修改时间。", fontSize = 12.sp, color = Teal)
+                if (plan.keptPictures.isNotEmpty()) Text("保留：" + plan.keptPictures.joinToString("、") { File(it.path).let { file -> "${file.parentFile?.name}/${file.name}" } }, fontSize = 11.sp, color = Muted, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 Text("应用只检查对应小图是否存在，无法确认 NAS 备份状态。若 NAS 开启了同步删除，请先确认不会连带删除备份。", fontSize = 12.sp, color = Muted)
                 Column(Modifier.fillMaxWidth().heightIn(max = 180.dp).verticalScroll(rememberScrollState())) {
                     plan.files.forEach { file -> SelectionContainer { Text("原件：${file.source.path}\n小图：${file.output.path}", fontSize = 11.sp, modifier = Modifier.padding(vertical = 4.dp)) } }

@@ -20,7 +20,7 @@ data class CleanupStamp(val path: String, val size: Long, val modified: Long, va
 data class CleanupOriginal(val source: CleanupStamp, val output: CleanupStamp)
 data class CleanupGroup(val files: List<CleanupOriginal>)
 data class CleanupNote(val path: String, val state: String, val detail: String, val bytes: Long = 0)
-data class OriginalCleanupPlan(val groups: List<CleanupGroup>, val skipped: List<CleanupNote>) {
+data class OriginalCleanupPlan(val groups: List<CleanupGroup>, val skipped: List<CleanupNote>, val keptPictures: List<CleanupStamp> = emptyList()) {
     val files get() = groups.flatMap { it.files }
     val size get() = files.sumOf { it.source.size }
 }
@@ -35,13 +35,46 @@ class OriginalCleanup(private val context: Context) {
     }.getOrNull()
     private fun unchanged(expected: CleanupStamp) = stamp(expected.path) == expected
 
+    private fun pairKey(path: String) = File(path).let { it.parent.orEmpty() to it.nameWithoutExtension.lowercase() }
+    private fun photoTime(file: File): Long = runCatching {
+        val exif = androidx.exifinterface.media.ExifInterface(file)
+        val taken = exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_DATETIME_ORIGINAL) ?: return file.lastModified()
+        val date = java.time.LocalDateTime.parse(taken.take(19), java.time.format.DateTimeFormatter.ofPattern("uuuu:MM:dd HH:mm:ss"))
+        val offset = exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_OFFSET_TIME_ORIGINAL)?.let { java.time.ZoneOffset.of(it) }
+        val instant = if (offset != null) date.toInstant(offset) else date.atZone(java.time.ZoneId.systemDefault()).toInstant()
+        val subsecond = exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_SUBSEC_TIME_ORIGINAL).orEmpty().take(3).padEnd(3, '0').toLongOrNull() ?: 0
+        instant.toEpochMilli() + subsecond
+    }.getOrElse { file.lastModified() }
+
+    private suspend fun newestPicture(directory: String): CleanupStamp? {
+        val files = File(directory).listFiles() ?: error("无法确认目录中最新的图片，已停止清理：$directory")
+        var latest: CleanupStamp? = null
+        var latestTime = Long.MIN_VALUE
+        for (file in files) {
+            coroutineContext.ensureActive()
+            if (Files.isSymbolicLink(file.toPath()) || !file.isFile || file.extension.lowercase() !in MediaFormats.images) continue
+            val current = stamp(file.absolutePath) ?: error("无法确认图片状态，已停止清理：${file.name}")
+            val time = photoTime(file)
+            if (time > latestTime || (time == latestTime && current.path > latest?.path.orEmpty())) {
+                latest = current; latestTime = time
+            }
+        }
+        return latest
+    }
+
     suspend fun prepare(entries: List<MediaEntry>, prefix: String): OriginalCleanupPlan {
         require(validPrefix(prefix)) { "目录前缀无效" }
         val pending = VivoPairProcessor.incompleteOutputs(context)
         val skipped = mutableListOf<CleanupNote>()
+        val keepers = entries.mapNotNull { File(it.source).parent }.distinct().mapNotNull { newestPicture(it) }
+        val keepKeys = keepers.map { pairKey(it.path) }.toSet()
         val checked = linkedMapOf<String, CleanupOriginal>()
         for (entry in entries.distinctBy { it.source }) {
             coroutineContext.ensureActive()
+            if (pairKey(entry.source) in keepKeys) {
+                skipped += CleanupNote(entry.source, "保留", if (keepers.any { it.path == entry.source }) "保留此目录最新图片，避免相册隐藏" else "最新图片的同名配对文件，一并保留")
+                continue
+            }
             val original = stamp(entry.source)
             if (original == null || original.size != entry.size || original.modified != entry.modified) {
                 skipped += CleanupNote(entry.source, "跳过", "原件不可访问或扫描后已变化，请重新扫描")
@@ -84,24 +117,39 @@ class OriginalCleanup(private val context: Context) {
                 }
             }
         }
-        return OriginalCleanupPlan(groups, skipped)
+        return OriginalCleanupPlan(groups, skipped, keepers)
     }
 
     suspend fun deleteConfirmed(plan: OriginalCleanupPlan, progress: suspend (List<CleanupNote>, Int) -> Unit): List<CleanupNote> {
         val notes = mutableListOf<CleanupNote>()
         val id = UUID.randomUUID().toString()
+        val directories = plan.files.mapNotNull { File(it.source.path).parent }.distinct()
+        val keepers = directories.associateWith { newestPicture(it) }.toMutableMap()
         // Persist the user's confirmed scope before deleting anything.
         saveReceipt(id, plan, notes)
         try {
             for (group in plan.groups) {
                 coroutineContext.ensureActive()
-                if (group.files.any { !unchanged(it.source) || !unchanged(it.output) }) {
+                // Re-evaluate if another app removed/replaced the retained picture after confirmation.
+                for (directory in group.files.mapNotNull { File(it.source.path).parent }.distinct()) {
+                    val kept = keepers[directory]
+                    if (kept == null || !unchanged(kept)) keepers[directory] = newestPicture(directory)
+                }
+                val keepKeys = keepers.values.filterNotNull().map { pairKey(it.path) }.toSet()
+                if (group.files.any { pairKey(it.source.path) in keepKeys }) {
+                    notes += group.files.map { CleanupNote(it.source.path, "保留", "保留目录最新图片及其配对文件，避免相册隐藏") }
+                } else if (group.files.any { !unchanged(it.source) || !unchanged(it.output) }) {
                     notes += group.files.map { CleanupNote(it.source.path, "跳过", "确认后原件或小图发生变化，整组保留") }
                 } else {
                     for (file in group.files) {
                         coroutineContext.ensureActive()
-                        val safe = unchanged(file.source) && group.files.all { unchanged(it.output) }
-                        val note = if (!safe) CleanupNote(file.source.path, "跳过", "原件或小图发生变化，保留原件")
+                        val directory = File(file.source.path).parent
+                        val kept = keepers[directory]
+                        if (directory != null && (kept == null || !unchanged(kept))) keepers[directory] = newestPicture(directory)
+                        val protected = keepers[directory]?.let { pairKey(it.path) == pairKey(file.source.path) } == true
+                        val safe = !protected && unchanged(file.source) && group.files.all { unchanged(it.output) }
+                        val note = if (protected) CleanupNote(file.source.path, "保留", "保留目录最新图片及其配对文件，避免相册隐藏")
+                        else if (!safe) CleanupNote(file.source.path, "跳过", "原件或小图发生变化，保留原件")
                         else try {
                             if (Files.deleteIfExists(File(file.source.path).toPath())) CleanupNote(file.source.path, "已删除", "已确认备份并保留小图", file.source.size)
                             else CleanupNote(file.source.path, "跳过", "原件已不存在")
@@ -122,7 +170,7 @@ class OriginalCleanup(private val context: Context) {
     }
     private fun saveReceipt(id: String, plan: OriginalCleanupPlan, notes: List<CleanupNote>) {
         val dir = File(context.filesDir, "original-cleanup").apply { mkdirs() }
-        val data = JSONObject().put("confirmedAtOrUpdatedAt", System.currentTimeMillis()).put("files", JSONArray().apply {
+        val data = JSONObject().put("confirmedAtOrUpdatedAt", System.currentTimeMillis()).put("keptPictures", JSONArray(plan.keptPictures.map { it.path })).put("files", JSONArray().apply {
             plan.files.forEach { file -> put(JSONObject().put("source", file.source.path).put("output", file.output.path)
                 .put("state", notes.firstOrNull { it.path == file.source.path }?.state ?: "未记录完成")) }
         })
