@@ -14,7 +14,7 @@
 
 | 准备：来源与目录 | 文件：扫描与选择 | 结果：任务记录 |
 | :---: | :---: | :---: |
-| <a href="docs/screenshots/prepare.png"><img src="docs/screenshots/prepare.png" alt="准备页" width="240" /></a> | <a href="docs/screenshots/files.png"><img src="docs/screenshots/files.png" alt="文件页" width="240" /></a> | <a href="docs/screenshots/tasks.png"><img src="docs/screenshots/tasks.png" alt="结果页" width="240" /></a> |
+| <a href="docs/screenshots/prepare.png"><img src="docs/screenshots/prepare.webp" alt="准备页" width="240" /></a> | <a href="docs/screenshots/files.png"><img src="docs/screenshots/files.webp" alt="文件页" width="240" /></a> | <a href="docs/screenshots/tasks.png"><img src="docs/screenshots/tasks.webp" alt="结果页" width="240" /></a> |
 
 ## 主要功能
 
