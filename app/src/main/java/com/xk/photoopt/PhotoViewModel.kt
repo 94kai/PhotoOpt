@@ -29,7 +29,7 @@ class PhotoViewModel(application: Application) : AndroidViewModel(application) {
     var hideProcessed by mutableStateOf(true); private set
     fun updateHideProcessed(value: Boolean) { hideProcessed = value }
     val visibleEntries get() = if (hideProcessed) entries.filterNot { it.outputExists } else entries
-    var forceStatic by mutableStateOf(true); private set
+    var forceStatic by mutableStateOf(false); private set
     private var scannedEntries: List<MediaEntry> = emptyList()
     var entries by mutableStateOf<List<MediaEntry>>(emptyList()); private set
     var selected by mutableStateOf<Set<String>>(emptySet()); private set
