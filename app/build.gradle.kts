@@ -12,8 +12,8 @@ android {
         applicationId = "com.xk.photoopt"
         minSdk = 31
         targetSdk = 35
-        versionCode = 29
-        versionName = "1.8.3"
+        versionCode = 41
+        versionName = "1.9.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

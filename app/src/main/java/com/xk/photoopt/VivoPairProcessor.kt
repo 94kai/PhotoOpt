@@ -27,14 +27,15 @@ class VivoPairProcessor(private val context: Context) {
         val staged = mutableListOf<File>()
         var journal: File? = null
         var copied = false
+        var copyRemovedHdr = false
         try {
             VivoMedia.compressPhoto(context, photo, temps[0], quality, photo.vivoId!!, id)
-            VideoProcessor(context).compress(video, temps[1], quality, preserveDimensions = true)
+            VideoProcessor(context).compress(video, temps[1], quality)
             VivoMedia.appendVideoMetadata(File(video.source), temps[1], photo.vivoId, id)
             ensureActive()
             check(temps.none { it.length() == 0L }) { "实况输出为空" }
             if (temps.sumOf { it.length() } >= pair.sumOf { it.size }) {
-                ordered.forEachIndexed { index, entry -> File(entry.source).copyTo(temps[index], overwrite = true); CopyMarker.write(temps[index], File(entry.source).extension, "vivo-pair-not-smaller") }
+                ordered.forEachIndexed { index, entry -> File(entry.source).copyTo(temps[index], overwrite = true); if (index == 0) copyRemovedHdr = HdrGainMap.removeFromFile(temps[index]); CopyMarker.write(temps[index], File(entry.source).extension, "vivo-pair-not-smaller") }
                 copied = true
             }
             require(pair.all { File(it.source).length() == it.size && File(it.source).lastModified() == it.modified }) { "处理期间实况原文件已变化" }
@@ -61,7 +62,7 @@ class VivoPairProcessor(private val context: Context) {
             check(journal!!.delete()) { "无法完成实况提交记录" }
             journal = null
             MediaScannerConnection.scanFile(context, ordered.map { it.destination(prefix).path }.toTypedArray(), null, null)
-            outcomes("完成", if (copied) "原样复制 · 实况整组压缩后没有更小 · 已写入复制标记" else "vivo 实况 B · 照片和视频已压缩 · 保留配对信息")
+            outcomes("完成", if (copyRemovedHdr) "移除 HDR 增益图 · 主图与视频未重新编码" else if (copied) "原样复制 · 实况整组压缩后没有更小 · 已写入复制标记" else "vivo 实况 B · 已压缩并移除 HDR 增益 · 保留动态与配对")
         } finally {
             temps.forEach { it.delete() }
             if (journal != null) recover(context)

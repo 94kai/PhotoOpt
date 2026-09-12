@@ -81,7 +81,7 @@ class MediaEngine(private val context: Context) {
                             val index = next.getAndIncrement()
                             if (index >= files.size) break
                             val (file, root) = files[index]
-                            val basic = MediaEntry(file.path, root.path, file.relativeTo(root).path,
+                            var basic = MediaEntry(file.path, root.path, file.relativeTo(root).path,
                                 file.length(), file.lastModified(), kind = if (file.extension.lowercase() in videoExtensions) "视频" else "图片",
                                 metadataRead = false)
                             results[index] = try {
@@ -91,9 +91,14 @@ class MediaEngine(private val context: Context) {
                                         .first { it.source == file.path }
                                 } else if (listOf(basic.destination(prefix), basic.copy(copyOriginal = true).destination(prefix)).any { Files.exists(it.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS) })
                                     basic.copy(reason = "同名输出已存在，直接跳过，不读取原件内容", outputExists = true)
-                                else if (hasLivePartner(file)) basic.copy(kind = if (basic.kind == "视频") "疑似实况视频" else "疑似实况图", reason = "同目录同名照片/视频，疑似配对；两者均跳过")
-                                else if (basic.kind != "视频" && file.extension.lowercase() !in setOf("jpg", "jpeg", "png", "webp"))
-                                    basic.copy(reason = "${file.extension.uppercase()} 暂不转码，保留原件")
+                                else {
+                                    val actual = MediaHeader.imageFormat(file)
+                                    basic = basic.copy(sourceFormat = actual, kind = if (actual != null) "图片" else basic.kind)
+                                    if (Files.exists(basic.copy(copyOriginal = true).destination(prefix).toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS))
+                                        basic.copy(reason = "同名输出已存在，直接跳过，不读取原件内容", outputExists = true)
+                                    else if (hasLivePartner(file)) basic.copy(kind = if (basic.kind == "视频") "疑似实况视频" else "疑似实况图", reason = "同目录同名照片/视频，疑似配对；两者均跳过")
+                                else if (basic.kind != "视频" && (basic.sourceFormat ?: file.extension.lowercase()) !in setOf("jpg", "jpeg", "png", "webp"))
+                                    basic.copy(reason = "${(basic.sourceFormat ?: file.extension).uppercase()} 暂不转码，保留原件")
                                 else if (basic.kind != "视频" && basic.size in 1 until 180 * 1024)
                                     if (file.readBytes().toString(Charsets.ISO_8859_1).contains(MARKER)) basic.copy(reason = "已有 PhotoOpt 标记") else basic.copy(copyOriginal = true)
                                 else {
@@ -103,6 +108,7 @@ class MediaEngine(private val context: Context) {
                                         if (file.length() == basic.size && file.lastModified() == basic.modified)
                                             cache.put(result)
                                     }
+                                }
                                 }
                             } catch (e: CancellationException) { throw e }
                             catch (e: Exception) { basic.copy(reason = "读取失败：${e.message}") }
@@ -150,8 +156,8 @@ class MediaEngine(private val context: Context) {
     }
 
     private fun inspect(file: File, root: File): MediaEntry {
-        val ext = file.extension.lowercase()
-        var entry = MediaEntry(file.path, root.path, file.relativeTo(root).path, file.length(), file.lastModified())
+        val ext = MediaHeader.imageFormat(file) ?: file.extension.lowercase()
+        var entry = MediaEntry(file.path, root.path, file.relativeTo(root).path, file.length(), file.lastModified(), sourceFormat = ext)
         if (ext in videoExtensions) return inspectVideo(entry)
         if (ext !in setOf("jpg", "jpeg", "png", "webp")) return entry.copy(reason = "${ext.uppercase()} 暂不转码，保留原件")
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -162,7 +168,7 @@ class MediaEngine(private val context: Context) {
             taken = exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL), hasGps = exif.latLong != null)
         if (exif.getAttribute(ExifInterface.TAG_USER_COMMENT)?.contains(MARKER) == true) return entry.copy(reason = "已有 PhotoOpt 标记")
         if (ext in setOf("png", "webp")) {
-            if (isAnimated(file)) return entry.copy(kind = "动图", reason = "动态 PNG / WebP 暂不转码")
+            if (isAnimated(file, ext)) return entry.copy(kind = "动图", reason = "动态 PNG / WebP 暂不转码")
             return entry
         }
         val layout = jpegLayout(file)
@@ -171,9 +177,11 @@ class MediaEngine(private val context: Context) {
         // A validated JPEG primary image can be extracted without carrying timing metadata.
         // Keep the default conservative; the explicit force-static option enables extraction.
         if (metadata.contains("com.android.capture.fps") || hasSlowMotionMetadata(metadata)) {
-            return entry.copy(reason = "含特殊拍摄速率元数据，可勾选强制转普通图片", forceStaticAllowed = true)
+            return entry.copy(reason = "含特殊拍摄速率元数据，可勾选兼容模式", forceStaticAllowed = true)
         }
         if (metadata.contains("MPF\u0000") || metadata.contains("hdrgm:") || metadata.contains("GainMap")) {
+            if (metadata.contains("MotionPhoto") || metadata.contains("MicroVideo"))
+                return entry.copy(kind = "实况图", reason = "HDR 与动态共用未知结构，可强制转普通主图", forceStaticAllowed = true)
             return entry.copy(kind = "HDR / 多画面 · 仅主图", primaryOnly = true)
         }
         val motion = metadata.contains("MotionPhoto") || metadata.contains("MicroVideo")
@@ -229,6 +237,7 @@ class MediaEngine(private val context: Context) {
         val source = File(entry.source)
         var output = entry.destination(prefix)
         var copied = entry.copyOriginal
+        var removedHdr = false
         fun result(state: String, detail: String, after: Long = 0, existing: Boolean = false) = Outcome(source.path, output.path, state, detail, entry.size, after, existing)
         if (!entry.eligible) return@withContext result("跳过", entry.reason.orEmpty())
         if (source.length() != entry.size || source.lastModified() != entry.modified) return@withContext result("跳过", "原文件已变化，请重新扫描")
@@ -248,7 +257,10 @@ class MediaEngine(private val context: Context) {
                 output = entry.copy(copyOriginal = true).destination(prefix)
                 source.copyTo(temp, overwrite = true)
             }
-            if (copied) CopyMarker.write(temp, source.extension, if (entry.copyOriginal) "already-small" else "not-smaller")
+            if (copied) {
+                if ((entry.sourceFormat ?: source.extension.lowercase()) in setOf("jpg", "jpeg")) removedHdr = HdrGainMap.removeFromFile(temp)
+                CopyMarker.write(temp, entry.sourceFormat ?: source.extension, if (entry.copyOriginal) "already-small" else "not-smaller")
+            }
             check(source.length() == entry.size && source.lastModified() == entry.modified) { "处理期间原文件发生变化" }
             check(output.parentFile!!.isDirectory || output.parentFile!!.mkdirs()) { "无法创建输出目录" }
             // Stage on the destination volume, then move without REPLACE_EXISTING. Never overwrite user files.
@@ -263,7 +275,7 @@ class MediaEngine(private val context: Context) {
             coroutineContext.ensureActive()
             Files.move(staged.toPath(), output.toPath())
             MediaScannerConnection.scanFile(context, arrayOf(output.path), null, null)
-            result("完成", if (copied) "原样复制 · ${if (entry.copyOriginal) "文件已很小" else "压缩后没有更小"} · 已写入复制标记" else if (entry.forcedStatic) "强制转普通图片 · 已移除未知动态和附加数据" else if (entry.stillOnly) "仅静态照片 · 实况动态已移除${if (temp.length() >= entry.size) " · 体积未减少" else ""}" else if (entry.primaryOnly) "仅主图 · 普通 JPEG · 未保留 HDR 与附加画面" else if (entry.motionOffset > 0) "静态部分已压缩 · 动态视频原样保留" else "保留拍摄信息 · 已写入 PhotoOpt 标记", output.length())
+            result("完成", if (removedHdr) "移除 HDR 增益图 · 主图未重新编码 · 已写入处理标记" else if (copied) "原样复制 · ${if (entry.copyOriginal) "文件已很小" else "压缩后没有更小"} · 已写入复制标记" else if (entry.forcedStatic) "兼容模式 · 已移除未知动态和附加数据" else if (entry.stillOnly) "仅静态照片 · 实况动态已移除${if (temp.length() >= entry.size) " · 体积未减少" else ""}" else if (entry.primaryOnly) "仅主图 · 普通 JPEG · 未保留 HDR 与附加画面" else if (entry.motionOffset > 0) "静态部分已压缩 · 动态视频原样保留" else "保留拍摄信息 · 已写入 PhotoOpt 标记", output.length())
         } finally {
             temp.delete()
             staged?.delete()
@@ -283,7 +295,7 @@ class MediaEngine(private val context: Context) {
         val bitmap = BitmapFactory.decodeFile(source.path, BitmapFactory.Options().apply { inSampleSize = sample; inPreferredConfig = Bitmap.Config.ARGB_8888; if (entry.primaryOnly) inPreferredColorSpace = android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB) })
             ?: error("图片解码失败")
         try {
-            if (entry.primaryOnly && android.os.Build.VERSION.SDK_INT >= 34) bitmap.setGainmap(null)
+            if (android.os.Build.VERSION.SDK_INT >= 34) bitmap.setGainmap(null)
             if (bitmap.hasAlpha()) {
                 val row = IntArray(bitmap.width)
                 for (y in 0 until bitmap.height) {
@@ -301,7 +313,7 @@ class MediaEngine(private val context: Context) {
         coroutineContext.ensureActive()
         val sourceExif = ExifInterface(source)
         // Preserve JPEG EXIF, XMP, ICC and IPTC blocks before updating dimensions and adding our marker.
-        if (!entry.primaryOnly && source.extension.lowercase() in setOf("jpg", "jpeg")) {
+        if (!entry.primaryOnly && (entry.sourceFormat ?: source.extension.lowercase()) in setOf("jpg", "jpeg")) {
             val segments = jpegLayout(source).segments
             val imageOnly = File(context.cacheDir, "photoopt-${UUID.randomUUID()}.jpg")
             try {
@@ -324,7 +336,7 @@ class MediaEngine(private val context: Context) {
                 sourceExif.getAttribute(tag)?.let { destExif.setAttribute(tag, it) }
             }
             destExif.setAttribute(ExifInterface.TAG_COLOR_SPACE, "1")
-        } else if (source.extension.lowercase() !in setOf("jpg", "jpeg")) {
+        } else if ((entry.sourceFormat ?: source.extension.lowercase()) !in setOf("jpg", "jpeg")) {
             ExifInterface::class.java.fields.filter { it.name.startsWith("TAG_") && it.type == String::class.java }.forEach { field ->
                 val tag = field.get(null) as String
                 sourceExif.getAttribute(tag)?.let { value -> destExif.setAttribute(tag, value) }
@@ -346,9 +358,9 @@ class MediaEngine(private val context: Context) {
         verifyImage(sourceExif, target, desiredW, desiredH, preserveXmp = !entry.primaryOnly)
         if (entry.primaryOnly) {
             val layout = jpegLayout(target)
-            check(layout.end == target.length()) { "主图副本仍含附加数据" }
-            check(layout.segments.none { it.toString(Charsets.ISO_8859_1).contains("MPF\u0000") }) { "主图副本仍含 MPF" }
-            check(ExifInterface(target).getAttribute(ExifInterface.TAG_XMP) == null) { "主图副本仍含原 XMP" }
+            check(layout.end == target.length()) { "静态小图仍含附加数据" }
+            check(layout.segments.none { it.toString(Charsets.ISO_8859_1).contains("MPF\u0000") }) { "静态小图仍含 MPF" }
+            check(ExifInterface(target).getAttribute(ExifInterface.TAG_XMP) == null) { "静态小图仍含原 XMP" }
         }
         if (entry.motionOffset > 0) {
             val outOffset = jpegLayout(target).end
@@ -393,8 +405,8 @@ class MediaEngine(private val context: Context) {
         return wanted.any { "${file.nameWithoutExtension.lowercase()}.$it" in names }
     }
 
-    private fun isAnimated(file: File): Boolean = RandomAccessFile(file, "r").use { r ->
-        if (file.extension.equals("webp", true)) {
+    private fun isAnimated(file: File, format: String): Boolean = RandomAccessFile(file, "r").use { r ->
+        if (format == "webp") {
             if (r.length() < 21) return@use true
             r.seek(12); val id = ByteArray(4); r.readFully(id)
             if (String(id) == "VP8X") { r.seek(20); return@use r.readUnsignedByte() and 2 != 0 }

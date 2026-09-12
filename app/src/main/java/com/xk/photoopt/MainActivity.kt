@@ -186,18 +186,17 @@ fun PhotoApp(vm: PhotoViewModel = viewModel()) {
     if (review) AlertDialog(
         onDismissRequest = { review = false },
         icon = { Icon(Icons.Rounded.AutoAwesome, null) },
-        title = { Text("生成独立的小图副本") },
+        title = { Text("生成小图") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("${vm.selected.size} 个文件 · 原始大小 ${bytes(vm.chosen.sumOf { it.size })}", fontWeight = FontWeight.Bold)
-                Text("${vm.quality.title} · JPEG 质量 ${vm.quality.jpeg}\n${if (vm.quality.edge == 0) "照片保持原分辨率" else "照片长边最多 ${vm.quality.edge} 像素，不放大小图"}\n视频：H.264 / AAC，最高 ${vm.quality.bitrate / 1_000_000} Mbps")
+                Text("${vm.quality.title} · JPEG 质量 ${vm.quality.jpeg}\n${if (vm.quality.edge == 0) "照片保持原分辨率" else "照片长边最多 ${vm.quality.edge} 像素，不放大小图"}\n视频：H.264 / AAC，目标 ${vm.quality.bitrate / 1_000_000} Mbps")
                 HorizontalDivider()
                 vm.chosen.map { File(it.root).let { root -> "${root.name} → ${vm.prefix}${root.name}" } }.distinct().forEach { Text(it, fontSize = 13.sp) }
-                Text("拍摄时间、位置等信息将尽量保留，并写入 PhotoOpt 标记。单文件实况保留视频；vivo 配对实况照片、视频都压缩并保持原尺寸。", fontSize = 13.sp)
+                Text("拍摄时间、位置等信息将尽量保留，并写入 PhotoOpt 标记。单文件实况保留视频；vivo 配对实况照片、视频都按所选档位压缩与缩放，保留配对信息。", fontSize = 13.sp)
                 Text("原件始终保留。输出已有同名文件、元数据校验失败将跳过或报告失败；小文件、压缩后未变小的文件原样复制。", color = Teal, fontSize = 13.sp)
                 if (vm.chosen.any { it.forcedStatic }) Text("将强制提取 ${vm.chosen.count { it.forcedStatic }} 张普通主图；未知动态与附加数据不保留。", fontSize = 12.sp, color = Teal)
-                if (vm.chosen.any { it.stillOnly && !it.forcedStatic }) Text("已开启实况只保留照片：生成的小图不能动，原始实况保留。", fontSize = 12.sp, color = Teal)
-                if (vm.chosen.any { it.primaryOnly && !it.stillOnly }) Text("含 ${vm.chosen.count { it.primaryOnly && !it.stillOnly }} 张仅处理主图的 HDR / 多画面 JPEG；副本不保留 HDR 和附加画面。", fontSize = 12.sp, color = Muted)
+                if (vm.chosen.any { it.primaryOnly && !it.stillOnly }) Text("含 ${vm.chosen.count { it.primaryOnly && !it.stillOnly }} 张仅处理主图的 HDR / 多画面 JPEG；小图不保留 HDR 和附加画面。", fontSize = 12.sp, color = Muted)
                 Text("请勿把“小图-”目录加入飞牛备份范围。清理手机原件后才会释放空间。", fontSize = 12.sp, color = Muted)
             }
         },
@@ -212,17 +211,29 @@ fun PhotoApp(vm: PhotoViewModel = viewModel()) {
             review = false
         }) { Text("返回") } }
     )
+    OriginalCleanupDialogs(vm)
     if (donation) DonationDialog { donation = false }
     if (limitations) LimitationsDialog { limitations = false }
-    if (about) AlertDialog(onDismissRequest = { about = false }, title = { Text("轻相册") }, text = {
-        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("原图存 NAS，回忆随身带。")
-            Text("01  添加目录或指定文件，在文件页扫描。扫描只读，等同于演练，不生成副本。")
-            Text("02  查看扫描结果，勾选后点击生成小图，生成“小图-原目录名”。子目录结构保留，原件不变。")
-            Text("03  确认 NAS 已有原件，并检查小图效果后，自行清理手机原件。")
-            Text("JPEG、静态 PNG / WebP → JPEG；透明图片跳过。MP4 / MOV / M4V → H.264 MP4。可识别的 Google JPEG 实况图只压缩静态部分。")
-            Text("HEIC / HEIF、HDR、Apple 配对实况图和未知厂商实况格式暂时跳过。视频保留时间和位置，不保证保留所有厂商私有信息。")
-            Text("本地目录访问用于创建同级输出目录；无需登录，不申请网络权限。输出目录是否被飞牛备份由你的飞牛设置决定。")
+    if (about) AlertDialog(onDismissRequest = { about = false }, title = { Text("关于轻相册") }, text = {
+        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Text("原图存 NAS，回忆随身带。", fontWeight = FontWeight.Medium)
+            Text("照片和视频备份后，手机里的原件仍然占空间。轻相册参考 iCloud“优化储存空间”的思路，把已备份的本地照片、视频压缩成分辨率和画质适当降低的小图，方便继续在手机相册里翻看。", fontSize = 13.sp, lineHeight = 21.sp)
+            Text("确认备份和小图没问题后，清理手机原件，就能腾出空间。需要高清原图时，再通过 NAS App 查看或下载。轻相册只负责本地压缩，不会自动备份或自动取回原图。", fontSize = 13.sp, lineHeight = 21.sp)
+            HorizontalDivider(color = Paper)
+            Text("怎么使用", fontWeight = FontWeight.SemiBold)
+            Text("1. 先备份\n用飞牛等 NAS App 备份原照片和视频，确认能正常打开。轻相册不会替你备份。", fontSize = 13.sp, lineHeight = 21.sp)
+            Text("2. 选文件\n在准备页添加目录或指定文件，再到文件页点“扫描”。扫描不会修改原文件。", fontSize = 13.sp, lineHeight = 21.sp)
+            Text("3. 生成小图\n勾选要处理的文件，点“生成小图”。小图会放在旁边的“小图-原目录名”文件夹里，原件仍保留。", fontSize = 13.sp, lineHeight = 21.sp)
+            Text("4. 确认后清理\n检查 NAS 备份和小图都正常后，点“清理原件”。查看清单并再次确认才会删除，删除不能撤销。", fontSize = 13.sp, lineHeight = 21.sp)
+            Text("清理原件后才会真正释放空间。小图文件夹不要重复加入 NAS 备份范围。", fontSize = 12.sp, color = Teal, lineHeight = 20.sp)
+            Text("这里的“小图”也包括压缩后的视频。格式与实况说明请点文件页的问号。", fontSize = 11.sp, color = Muted)
+            HorizontalDivider(color = Paper)
+            Text("最佳实践：按相册定期整理", fontWeight = FontWeight.SemiBold)
+            Text("1. 建几个相册\n在系统相册中创建“备份-日常”“备份-家人”“备份-旅行”等相册，确认它们对应手机里的实际文件夹。", fontSize = 13.sp, lineHeight = 21.sp)
+            Text("2. 定期整理并备份\n把需要备份的照片和视频移动到对应相册，借助 NAS App、百度网盘等软件定期备份这些目录，等待备份完成。", fontSize = 13.sp, lineHeight = 21.sp)
+            Text("3. 用轻相册生成小图\n选择这几个原件目录进行处理。小图会保存到另一个同级目录，例如“备份-旅行”对应“小图-备份-旅行”，方便继续在系统相册中查看。", fontSize = 13.sp, lineHeight = 21.sp)
+            Text("4. 检查后再清理\n确认备份能打开、小图效果满意后，再清理已经处理好的手机原件。以后重复整理、备份、生成小图即可。", fontSize = 13.sp, lineHeight = 21.sp)
+            Text("备份软件只选原件目录，避免重复上传小图。清理前也要确认不会同步删除 NAS 或网盘中的备份。", fontSize = 12.sp, color = Teal, lineHeight = 20.sp)
         }
     }, confirmButton = { TextButton(onClick = { about = false }) { Text("知道了") } })
     detail?.let { entry ->
@@ -246,7 +257,7 @@ fun PhotoApp(vm: PhotoViewModel = viewModel()) {
                     Text(if (!entry.metadataRead) "已直接跳过，未读取拍摄时间和位置。" else "拍摄时间：${entry.taken ?: "未记录"}\n位置：${if (entry.hasGps) "有 GPS 信息，将保留" else "未记录"}", fontSize = 13.sp)
                     SelectionContainer { Text("来源：${entry.source}\n\n输出：${entry.destination(vm.prefix).path}", fontSize = 12.sp) }
                     entry.reason?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
-                    if (entry.primaryOnly) Text("仅生成普通主图副本，不保留 HDR 增益图和附加画面；原件保留。", fontSize = 12.sp, color = Muted)
+                    if (entry.primaryOnly) Text("仅生成普通静态小图，不保留 HDR 增益图和附加画面；原件保留。", fontSize = 12.sp, color = Muted)
                     TextButton(onClick = { detail = null }, modifier = Modifier.align(Alignment.End)) { Text("关闭") }
                 }
             }
@@ -306,25 +317,7 @@ private fun SetupScreen(vm: PhotoViewModel, access: Boolean, busy: Boolean, gran
             }
         }
         item {
-            SectionHeading("02", "选择画质", "清晰与体积，刚刚好")
-            Spacer(Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                Quality.entries.forEach { quality ->
-                    val active = vm.quality == quality
-                    Surface(onClick = { vm.updateQuality(quality) }, enabled = !busy, modifier = Modifier.weight(1f), shape = RoundedCornerShape(20.dp), color = if (active) Ink else Color.White) {
-                        Column(Modifier.padding(horizontal = 12.dp, vertical = 17.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Icon(when (quality) { Quality.ORIGINAL -> Icons.Rounded.HighQuality; Quality.BALANCED -> Icons.Rounded.Tune; Quality.COMPACT -> Icons.Rounded.Bolt }, null, Modifier.size(23.dp), tint = if (active) Lime else Teal)
-                            Text(quality.title, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = if (active) Color.White else Ink)
-                            Text(when (quality) { Quality.ORIGINAL -> "保留分辨率\n质量 85"; Quality.BALANCED -> "长边 2560\n质量 82"; Quality.COMPACT -> "长边 1920\n质量 76" }, color = if (active) Color(0xFFB9C9BC) else Muted, fontSize = 11.sp, lineHeight = 17.sp)
-                        }
-                    }
-                }
-            }
-            Spacer(Modifier.height(10.dp))
-            Text("未变小的文件原样复制 · 不放大小图", fontSize = 11.sp, color = Muted)
-        }
-        item {
-            SectionHeading("03", "输出设置", "原件始终保留")
+            SectionHeading("02", "输出设置", "原件始终保留")
             Spacer(Modifier.height(12.dp))
             WhiteCard {
                 OutlinedTextField(value = vm.prefix, onValueChange = vm::updatePrefix, enabled = !busy, singleLine = true,
@@ -392,7 +385,7 @@ private fun FilesScreen(vm: PhotoViewModel, busy: Boolean, onPreview: (MediaEntr
         item {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("文件清单", Modifier.weight(1f), fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                IconButton(onClick = onLimitations) { Icon(Icons.Rounded.HelpOutline, "不可处理类型说明", tint = Muted, modifier = Modifier.size(20.dp)) }
+                IconButton(onClick = onLimitations) { Icon(Icons.Rounded.HelpOutline, "处理说明", tint = Muted, modifier = Modifier.size(20.dp)) }
                 Button(onClick = onScan, enabled = vm.canScan && !busy, shape = RoundedCornerShape(12.dp),
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)) {
                     Icon(Icons.Rounded.ManageSearch, null, Modifier.size(17.dp)); Spacer(Modifier.width(5.dp))
@@ -408,19 +401,15 @@ private fun FilesScreen(vm: PhotoViewModel, busy: Boolean, onPreview: (MediaEntr
                 Surface(color = Color.White, shape = RoundedCornerShape(16.dp)) {
                     Column(Modifier.padding(horizontal = 4.dp, vertical = 4.dp)) {
                         Row {
-                            OptionCheck("是否处理视频", vm.includeVideos, !busy, vm::setVideos, Modifier.weight(1f))
                             OptionCheck("隐藏已处理", vm.hideProcessed, true, vm::updateHideProcessed, Modifier.weight(1f))
-                        }
-                        Row {
-                            OptionCheck("vivo实况图只保留照片", vm.liveStillOnly, !busy, vm::updateLiveStillOnly, Modifier.weight(1f))
-                            OptionCheck("强制转普通图片", vm.forceStatic, !busy, vm::updateForceStatic, Modifier.weight(1f))
+                            OptionCheck("兼容模式", vm.forceStatic, !busy, vm::updateForceStatic, Modifier.weight(1f))
                         }
                     }
                 }
-                if (vm.liveStillOnly) Text("vivo实况图：只保留照片，小图不能动了，但更省空间。", fontSize = 11.sp, color = Muted, modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
-                if (vm.forceStatic) Text("强制转换：部分图片有无法识别的信息，强制转成普通图片。", fontSize = 11.sp, color = Muted, modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
+                if (vm.forceStatic) Text("兼容模式：对于不兼容的图像格式，直接提取主图进行压缩。如果已跳过中依旧有不支持的类型，或不兼容的图像希望兼容，可以联系作者", fontSize = 11.sp, color = Muted, modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("已选 ${vm.selected.size} 个文件", Modifier.weight(1f), fontSize = 11.sp, color = Muted)
+                    TextButton(onClick = vm::prepareOriginalCleanup, enabled = !busy && !vm.cleanupBusy, contentPadding = PaddingValues(horizontal = 0.dp)) { Icon(Icons.Rounded.DeleteSweep, null, Modifier.size(17.dp)); Spacer(Modifier.width(4.dp)); Text("清理原件", fontSize = 12.sp) }
+                    Spacer(Modifier.weight(1f))
                     TextButton(onClick = vm::selectAll, enabled = !busy, contentPadding = PaddingValues(horizontal = 8.dp)) { Text("全选", fontSize = 12.sp) }
                     TextButton(onClick = vm::clearSelection, enabled = !busy, contentPadding = PaddingValues(horizontal = 8.dp)) { Text("清空", fontSize = 12.sp) }
                 }
@@ -476,7 +465,7 @@ private fun ResultsScreen(batch: BatchState, stop: () -> Unit, export: () -> Uni
                         Text(if (batch.running) "处理中 ${batch.completed}/${batch.total}" else if (batch.cancelled) "已中断" else if (batch.error != null) "任务异常" else "处理结束", color = Color.White, modifier = Modifier.weight(1f), fontSize = 12.sp)
                         Text("压缩减少 ${bytes(batch.saved)}", color = Lime, fontSize = 16.sp, fontWeight = FontWeight.Medium)
                     }
-                    Text("清理原件后释放 · 副本 ${bytes(batch.outputBytes)}", color = Color(0xFFB5C7BB), fontSize = 10.sp)
+                    Text("清理原件后释放 · 小图 ${bytes(batch.outputBytes)}", color = Color(0xFFB5C7BB), fontSize = 10.sp)
                 }
             }
         }
@@ -601,7 +590,7 @@ private fun LimitationsButton(onClick: () -> Unit) {
     TextButton(onClick = onClick, contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp)) {
         Icon(Icons.Rounded.HelpOutline, null, Modifier.size(17.dp))
         Spacer(Modifier.width(6.dp))
-        Text("不可处理类型说明", fontSize = 12.sp)
+        Text("处理说明", fontSize = 12.sp)
         Spacer(Modifier.width(4.dp))
         Icon(Icons.Rounded.ChevronRight, null, Modifier.size(16.dp))
     }
@@ -613,19 +602,16 @@ private fun LimitationsDialog(onDismiss: () -> Unit) {
         containerColor = Color.White,
         onDismissRequest = onDismiss,
         icon = { Icon(Icons.Rounded.Info, null) },
-        title = { Text("不可处理类型说明") },
+        title = { Text("处理说明") },
         text = {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                item {
-                    Text("分为格式限制、跳过规则和处理失败三类。下方列出当前规则；每个文件的具体原因请查看清单或处理记录。", fontSize = 13.sp, lineHeight = 21.sp)
-                }
                 processingLimitations.forEach { group ->
-                    item { Text(group.title, color = Teal, fontWeight = FontWeight.Bold, fontSize = 14.sp) }
+                    if (group.title.isNotBlank()) item { Text(group.title, color = Teal, fontWeight = FontWeight.Bold, fontSize = 14.sp) }
                     items(group.items) { limitation ->
                         Surface(shape = RoundedCornerShape(14.dp), color = Paper) {
                             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text(limitation.title, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = Ink)
-                                Text(limitation.explanation, fontSize = 12.sp, lineHeight = 20.sp, color = Ink.copy(alpha = .8f))
+                                SelectionContainer { Text(limitation.explanation, fontSize = 12.sp, lineHeight = 20.sp, color = Ink.copy(alpha = .8f)) }
                             }
                         }
                     }
@@ -829,7 +815,7 @@ private fun OutcomePreviewDialog(result: Outcome, dismiss: () -> Unit) {
                         else Thumbnail(entry, Modifier.fillMaxWidth().height(240.dp), large = true)
                     } }
                 }
-                SelectionContainer { Text("来源：${result.source}\n\n输出路径：${result.output}\n\n原大小：${bytes(result.before)}${if (result.state == "完成") "\n副本大小：${bytes(result.after)}" else ""}", fontSize = 12.sp) }
+                SelectionContainer { Text("来源：${result.source}\n\n输出路径：${result.output}\n\n原大小：${bytes(result.before)}${if (result.state == "完成") "\n小图大小：${bytes(result.after)}" else ""}", fontSize = 12.sp) }
                 TextButton(onClick = dismiss, modifier = Modifier.align(Alignment.End)) { Text("关闭") }
             }
         }
@@ -873,5 +859,48 @@ private fun DonationDialog(dismiss: () -> Unit) {
                 TextButton(onClick = dismiss) { Text("关闭") }
             }
         }
+    }
+}
+
+
+@Composable
+private fun OriginalCleanupDialogs(vm: PhotoViewModel) {
+    if (vm.cleanupBusy) AlertDialog(onDismissRequest = {}, title = { Text("清理原件") }, text = {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { Text(vm.cleanupPhase); LinearProgressIndicator(Modifier.fillMaxWidth()) }
+    }, confirmButton = {})
+    vm.originalCleanupPlan?.let { plan ->
+        var confirmed by remember(plan) { mutableStateOf(false) }
+        var showSkipped by remember(plan) { mutableStateOf(false) }
+        AlertDialog(onDismissRequest = vm::dismissCleanup, title = { Text(if (plan.files.isEmpty()) "暂无可清理原件" else "确认删除 ${plan.files.size} 个原文件？") }, text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("原件共 ${bytes(plan.size)}。检查范围是本次扫描的全部来源，不受文件勾选或隐藏状态影响。仅删除本机原件，保留小图和目录；删除不会进入相册回收站。", fontSize = 13.sp)
+                Text("应用只检查对应小图是否存在，无法确认 NAS 备份状态。若 NAS 开启了同步删除，请先确认不会连带删除备份。", fontSize = 12.sp, color = Muted)
+                Column(Modifier.fillMaxWidth().heightIn(max = 180.dp).verticalScroll(rememberScrollState())) {
+                    plan.files.forEach { file -> SelectionContainer { Text("原件：${file.source.path}\n小图：${file.output.path}", fontSize = 11.sp, modifier = Modifier.padding(vertical = 4.dp)) } }
+                }
+                if (plan.skipped.isNotEmpty()) {
+                    TextButton(onClick = { showSkipped = !showSkipped }) { Text("${plan.skipped.size} 项保留原件 · ${if (showSkipped) "收起" else "查看原因"}", fontSize = 12.sp) }
+                    if (showSkipped) Column(Modifier.heightIn(max = 140.dp).verticalScroll(rememberScrollState())) {
+                        plan.skipped.forEach { Text("${File(it.path).name}：${it.detail}", fontSize = 11.sp, modifier = Modifier.padding(vertical = 4.dp)) }
+                    }
+                }
+                if (plan.files.isNotEmpty()) Row(Modifier.fillMaxWidth().toggleable(confirmed, role = androidx.compose.ui.semantics.Role.Checkbox, onValueChange = { confirmed = it }), verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(confirmed, onCheckedChange = null)
+                    Text("我已确认 NAS 备份完成，并检查过小图可正常使用", fontSize = 12.sp)
+                }
+            }
+        }, confirmButton = {
+            if (plan.files.isNotEmpty()) TextButton(onClick = { vm.deleteConfirmedOriginals(confirmed) }, enabled = confirmed) { Text("删除原件", color = if (confirmed) MaterialTheme.colorScheme.error else Muted) }
+            else TextButton(onClick = vm::dismissCleanup) { Text("知道了") }
+        }, dismissButton = { if (plan.files.isNotEmpty()) TextButton(onClick = vm::dismissCleanup) { Text("取消") } })
+    }
+    if (!vm.cleanupBusy) vm.originalCleanupResults?.let { notes ->
+        AlertDialog(onDismissRequest = vm::dismissCleanup, title = { Text("原件清理结果") }, text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("已删除 ${notes.count { it.state == "已删除" }} 个 · ${bytes(notes.filter { it.state == "已删除" }.sumOf { it.bytes })}")
+                Text("跳过 ${notes.count { it.state == "跳过" }} 个 · 失败 ${notes.count { it.state == "失败" }} 个", fontSize = 12.sp)
+                notes.forEach { Text("${File(it.path).name} · ${it.state}\n${it.detail}", fontSize = 11.sp) }
+            }
+        }, confirmButton = { TextButton(onClick = vm::dismissCleanup) { Text("完成") } })
     }
 }

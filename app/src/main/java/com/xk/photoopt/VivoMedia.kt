@@ -64,18 +64,27 @@ object VivoMedia {
     suspend fun compressPhoto(context: Context, entry: MediaEntry, target: File, quality: Quality, oldId: String, newId: String) = withContext(Dispatchers.IO) {
         val source = File(entry.source)
         require(source.length() <= 40L * 1024 * 1024) { "实况照片文件过大，暂不处理" }
-        require(entry.width.toLong() * entry.height <= minOf(40_000_000L, Runtime.getRuntime().maxMemory() / 12)) { "实况原像素超出内存预算" }
+        val ratio = if (quality.edge == 0) 1.0 else minOf(1.0, quality.edge.toDouble() / maxOf(entry.width, entry.height))
+        val width = (entry.width * ratio).toInt().coerceAtLeast(1)
+        val height = (entry.height * ratio).toInt().coerceAtLeast(1)
+        var sample = 1
+        while (entry.width / (sample * 2) >= width && entry.height / (sample * 2) >= height) sample *= 2
+        require(entry.width.toLong() / sample * (entry.height / sample) <= minOf(40_000_000L, Runtime.getRuntime().maxMemory() / 12)) { "实况像素超出内存预算" }
         val encoded = File(context.cacheDir, "photoopt-${UUID.randomUUID()}.jpg")
         try {
-            val bitmap = BitmapFactory.decodeFile(source.path) ?: error("实况照片解码失败")
+            val bitmap = BitmapFactory.decodeFile(source.path, BitmapFactory.Options().apply { inSampleSize = sample; inPreferredConfig = Bitmap.Config.ARGB_8888 }) ?: error("实况照片解码失败")
             if (android.os.Build.VERSION.SDK_INT >= 34) bitmap.setGainmap(null)
-            try { encoded.outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.JPEG, quality.jpeg, it)) } }
+            try {
+                val scaled = if (bitmap.width != width || bitmap.height != height) Bitmap.createScaledBitmap(bitmap, width, height, true) else bitmap
+                try { encoded.outputStream().use { check(scaled.compress(Bitmap.CompressFormat.JPEG, quality.jpeg, it)) } }
+                finally { if (scaled !== bitmap) scaled.recycle() }
+            }
             finally { bitmap.recycle() }
             coroutineContext.ensureActive()
             val original = source.readBytes()
             val layout = jpegLayout(source)
             val oldEnd = layout.end.toInt()
-            val marker = "$MARKER; vivo-pair=B; originalBytes=${entry.size}".toByteArray()
+            val marker = "$MARKER; vivo-pair=B; profile=${quality.name}; maxEdge=${quality.edge}; hdrGainMapRemoved=true; originalBytes=${entry.size}".toByteArray()
             val prefix = java.io.ByteArrayOutputStream().apply {
                 write(byteArrayOf(0xff.toByte(), 0xd8.toByte()))
                 layout.segments.forEach { write(it) }
@@ -84,15 +93,29 @@ object VivoMedia {
             }.toByteArray()
             val primary = prefix + encoded.readBytes().let { it.copyOfRange(2, it.size) }
             fixMpf(original, primary, oldEnd)
-            val result = primary + original.copyOfRange(oldEnd, original.size)
+            val stripped = HdrGainMap.remove(primary + original.copyOfRange(oldEnd, original.size), primary.size)
+            val result = stripped.data
             replaceId(result, oldId, newId)
-            target.writeBytes(result)
+            val keptTail = result.copyOfRange(stripped.primaryEnd, result.size)
+            target.writeBytes(result.copyOfRange(0, stripped.primaryEnd))
+            ExifInterface(target).apply {
+                setAttribute(ExifInterface.TAG_IMAGE_WIDTH, width.toString())
+                setAttribute(ExifInterface.TAG_IMAGE_LENGTH, height.toString())
+                setAttribute(ExifInterface.TAG_PIXEL_X_DIMENSION, width.toString())
+                setAttribute(ExifInterface.TAG_PIXEL_Y_DIMENSION, height.toString())
+                saveAttributes()
+            }
+            target.appendBytes(keptTail)
             check(photoId(target) == newId) { "照片配对标识校验失败" }
             val afterLayout = jpegLayout(target)
-            check(afterLayout.end == primary.size.toLong()) { "JPEG 结构校验失败" }
-            val expectedTail = original.copyOfRange(oldEnd, original.size)
+            check(target.length() - afterLayout.end == keptTail.size.toLong()) { "JPEG 结构校验失败" }
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(target.path, bounds)
+            check(bounds.outWidth == width && bounds.outHeight == height) { "实况输出尺寸校验失败" }
+            val originalSdr = HdrGainMap.remove(original, oldEnd)
+            val expectedTail = originalSdr.data.copyOfRange(originalSdr.primaryEnd, originalSdr.data.size)
             replaceId(expectedTail, oldId, newId)
-            check(result.copyOfRange(primary.size, result.size).contentEquals(expectedTail)) { "实况照片附加数据校验失败" }
+            check(RandomAccessFile(target, "r").use { r -> r.seek(afterLayout.end); ByteArray(expectedTail.size).also { r.readFully(it) } }.contentEquals(expectedTail)) { "实况照片附加数据校验失败" }
             val before = ExifInterface(source); val after = ExifInterface(target)
             listOf(ExifInterface.TAG_DATETIME_ORIGINAL, ExifInterface.TAG_OFFSET_TIME_ORIGINAL, ExifInterface.TAG_SUBSEC_TIME_ORIGINAL,
                 ExifInterface.TAG_GPS_LATITUDE, ExifInterface.TAG_GPS_LATITUDE_REF, ExifInterface.TAG_GPS_LONGITUDE,

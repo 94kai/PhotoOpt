@@ -25,14 +25,12 @@ class PhotoViewModel(application: Application) : AndroidViewModel(application) {
     var roots by mutableStateOf(preferences.getStringSet("roots", emptySet())!!.sorted()); private set
     var singles by mutableStateOf<List<String>>(emptyList()); private set
     var prefix by mutableStateOf(preferences.getString("prefix", "小图-") ?: "小图-"); private set
-    var quality by mutableStateOf(if (!preferences.getBoolean("compact-default-v1", false)) Quality.COMPACT else runCatching { Quality.valueOf(preferences.getString("quality", "COMPACT")!!) }.getOrDefault(Quality.COMPACT)); private set
+    val quality = Quality.COMPACT
     var hideProcessed by mutableStateOf(true); private set
     fun updateHideProcessed(value: Boolean) { hideProcessed = value }
     val visibleEntries get() = if (hideProcessed) entries.filterNot { it.outputExists } else entries
     var forceStatic by mutableStateOf(true); private set
-    var liveStillOnly by mutableStateOf(true); private set
     private var scannedEntries: List<MediaEntry> = emptyList()
-    var includeVideos by mutableStateOf(true); private set
     var entries by mutableStateOf<List<MediaEntry>>(emptyList()); private set
     var selected by mutableStateOf<Set<String>>(emptySet()); private set
     var scanning by mutableStateOf(false); private set
@@ -45,6 +43,42 @@ class PhotoViewModel(application: Application) : AndroidViewModel(application) {
     var tab by mutableStateOf(0)
     var lastPlan by mutableStateOf<String?>(null); private set
     private var scanJob: Job? = null
+    var cleanupBusy by mutableStateOf(false); private set
+    var cleanupPhase by mutableStateOf(""); private set
+    var originalCleanupPlan by mutableStateOf<OriginalCleanupPlan?>(null); private set
+    var originalCleanupResults by mutableStateOf<List<CleanupNote>?>(null); private set
+    fun dismissCleanup() { if (!cleanupBusy) { originalCleanupPlan = null; originalCleanupResults = null } }
+    fun prepareOriginalCleanup() {
+        if (!scanned || scanning || cleanupBusy || batch.value.running) return
+        cleanupBusy = true; cleanupPhase = "正在检查原件和对应小图"; originalCleanupResults = null
+        val snapshot = entries.toList(); val outputPrefix = prefix
+        viewModelScope.launch {
+            try {
+                originalCleanupPlan = MediaWorkGate.mutex.withLock { withContext(Dispatchers.IO) { OriginalCleanup(getApplication()).prepare(snapshot, outputPrefix) } }
+            } catch (e: Exception) { message = "检查失败：${e.message}" }
+            finally { cleanupBusy = false }
+        }
+    }
+    fun deleteConfirmedOriginals(backupConfirmed: Boolean) {
+        val plan = originalCleanupPlan ?: return
+        if (!backupConfirmed || cleanupBusy || scanning || batch.value.running || plan.files.isEmpty()) return
+        originalCleanupPlan = null; cleanupBusy = true; cleanupPhase = "正在清理已确认的原件"; originalCleanupResults = emptyList()
+        viewModelScope.launch {
+            try {
+                originalCleanupResults = MediaWorkGate.mutex.withLock { withContext(Dispatchers.IO) {
+                    OriginalCleanup(getApplication()).deleteConfirmed(plan) { notes, total ->
+                        withContext(Dispatchers.Main) { originalCleanupResults = notes; cleanupPhase = "正在清理 ${notes.size} / $total" }
+                    }
+                } }
+            } catch (e: Exception) { message = "清理已停止：${e.message}。已删除的原件不会恢复，请查看小图或 NAS。" }
+            finally {
+                val removed = originalCleanupResults.orEmpty().filter { it.state == "已删除" }.map { it.path }.toSet()
+                entries = entries.filterNot { it.source in removed }; scannedEntries = scannedEntries.filterNot { it.source in removed }; selected = selected - removed
+                cleanupBusy = false
+            }
+        }
+    }
+
     val batch = BatchProgress.state
     val chosen get() = entries.filter { it.source in selected }
     val canScan get() = (roots.isNotEmpty() || singles.isNotEmpty()) && validPrefix(prefix)
@@ -58,11 +92,6 @@ class PhotoViewModel(application: Application) : AndroidViewModel(application) {
         runCatching { TaskHistory.delete(getApplication(), id) }.onFailure { withContext(Dispatchers.Main) { message = "删除记录失败：${it.message}" } }
     } }
 
-    fun updateLiveStillOnly(value: Boolean) {
-        if (scanning || batch.value.running) return
-        liveStillOnly = value
-        applyOptionsToSelection()
-    }
     fun updateForceStatic(value: Boolean) {
         if (scanning || batch.value.running) return
         forceStatic = value
@@ -76,19 +105,13 @@ class PhotoViewModel(application: Application) : AndroidViewModel(application) {
     }
     private fun applyLiveMode(source: List<MediaEntry>): List<MediaEntry> = source.map { entry ->
         when {
-            forceStatic && entry.forceStaticAllowed && !entry.outputExists -> entry.copy(reason = null, kind = "强制转普通图片", primaryOnly = true,
+            forceStatic && entry.forceStaticAllowed && !entry.outputExists -> entry.copy(reason = null, kind = "兼容模式", primaryOnly = true,
                 stillOnly = true, forcedStatic = true, motionOffset = 0, copyOriginal = false, vivoId = null, vivoPartner = null)
-            !liveStillOnly || !entry.eligible -> entry
-            entry.vivoId != null && entry.kind == "视频" -> entry.copy(reason = "仅保留实况照片，不输出配对视频", vivoId = null, vivoPartner = null, stillOnly = true)
-            entry.vivoId != null || entry.motionOffset > 0 -> entry.copy(kind = "实况 · 仅静态照片", vivoId = null, vivoPartner = null,
-                motionOffset = 0, copyOriginal = false, primaryOnly = true, stillOnly = true)
             else -> entry
         }
     }
 
     fun updatePrefix(value: String) { prefix = value; invalidate(); if (validPrefix(value)) preferences.edit().putString("prefix", value).apply() }
-    fun updateQuality(value: Quality) { quality = value; preferences.edit().putString("quality", value.name).apply(); lastPlan = null }
-    fun setVideos(value: Boolean) { includeVideos = value; selected = if (value) selected + entries.filter { it.eligible && it.kind == "视频" && it.vivoId == null }.map { it.source } else selected - entries.filter { it.kind == "视频" && it.vivoId == null }.map { it.source }.toSet() }
     private fun invalidate() { scanJob?.cancel(); scanning = false; scanned = false; scannedEntries = emptyList(); entries = emptyList(); selected = emptySet(); lastPlan = null }
     fun addRoot(uri: Uri) {
         runCatching {
@@ -112,7 +135,7 @@ class PhotoViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     fun scan() {
-        if (!canScan || scanning || batch.value.running) return
+        if (!canScan || scanning || cleanupBusy || batch.value.running) return
         if (androidx.core.content.ContextCompat.checkSelfPermission(getApplication(), android.Manifest.permission.ACCESS_MEDIA_LOCATION) != android.content.pm.PackageManager.PERMISSION_GRANTED) { message = "需要允许照片位置信息访问，以避免 GPS 被系统隐藏。请在准备页授权。"; return }
         if (!Environment.isExternalStorageManager()) { message = "请先允许文件访问，以便生成同级输出目录"; return }
         scanning = true; scanCount = 0; scanTotal = 0; scanReused = 0; scanned = false; lastPlan = null; cleanupNote = null
@@ -146,7 +169,7 @@ class PhotoViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 scannedEntries = entries
                 entries = applyLiveMode(scannedEntries)
-                selected = entries.filter { it.eligible && (includeVideos || it.kind != "视频" || it.vivoId != null) }.map { it.source }.toSet()
+                selected = entries.filter { it.eligible }.map { it.source }.toSet()
                 scanned = true; tab = 1
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { message = e.message ?: "扫描失败" }
@@ -159,7 +182,7 @@ class PhotoViewModel(application: Application) : AndroidViewModel(application) {
         val group = setOfNotNull(entry.source, entry.vivoPartner)
         selected = if (entry.source in selected) selected - group else selected + group
     }
-    fun selectAll() { selected = entries.filter { it.eligible && (includeVideos || it.kind != "视频" || it.vivoId != null) }.map { it.source }.toSet() }
+    fun selectAll() { selected = entries.filter { it.eligible }.map { it.source }.toSet() }
     fun clearSelection() { selected = emptySet() }
     fun preparePlan(): String {
         val plan = JSONObject().apply {
@@ -175,7 +198,7 @@ class PhotoViewModel(application: Application) : AndroidViewModel(application) {
         return plan
     }
     fun start() {
-        if (chosen.isEmpty() || scanning || batch.value.running || !validPrefix(prefix)) return
+        if (chosen.isEmpty() || scanning || cleanupBusy || batch.value.running || !validPrefix(prefix)) return
         val snapshot = entries.filterNot { it.outputExists }.map { if (it.source in selected || !it.eligible) it else it.copy(reason = "未勾选，不处理") }
         val prefixSnapshot = prefix
         val qualitySnapshot = quality

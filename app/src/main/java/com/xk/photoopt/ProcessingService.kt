@@ -43,7 +43,7 @@ class ProcessingService : Service() {
                     val request = withContext(Dispatchers.IO) { JSONObject(requestFile.readText()).also { requestFile.delete() } }
                     val prefix = request.getString("prefix")
                     require(validPrefix(prefix)) { "无效的目录前缀" }
-                    val quality = Quality.valueOf(request.getString("quality"))
+                    val quality = Quality.COMPACT
                     val array = request.getJSONArray("entries")
                     val entries = (0 until array.length()).map { mediaFromJson(array.getJSONObject(it)) }.filterNot { it.outputExists }
                     val engine = MediaEngine(this@ProcessingService)
@@ -112,7 +112,7 @@ class ProcessingService : Service() {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val cancel = PendingIntent.getService(this, 1, Intent(this, ProcessingService::class.java).setAction("cancel"), PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Builder(this, "processing")
-            .setSmallIcon(R.drawable.ic_stat_photo).setContentTitle("轻相册 · 正在生成副本")
+            .setSmallIcon(R.drawable.ic_stat_photo).setContentTitle("轻相册 · 正在生成小图")
             .setContentText(text).setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true)
             .addAction(0, "停止", cancel).build()
     }
@@ -137,13 +137,13 @@ fun mediaToJson(entry: MediaEntry) = JSONObject().apply {
     put("source", entry.source); put("root", entry.root); put("relative", entry.relative)
     put("size", entry.size); put("modified", entry.modified); put("width", entry.width); put("height", entry.height)
     put("kind", entry.kind); put("reason", entry.reason); put("taken", entry.taken); put("hasGps", entry.hasGps)
-    put("forceStaticAllowed", entry.forceStaticAllowed); put("forcedStatic", entry.forcedStatic); put("outputExists", entry.outputExists); put("stillOnly", entry.stillOnly); put("primaryOnly", entry.primaryOnly); put("copyOriginal", entry.copyOriginal); put("vivoId", entry.vivoId); put("vivoPartner", entry.vivoPartner); put("metadataRead", entry.metadataRead); put("motionOffset", entry.motionOffset); put("durationMs", entry.durationMs)
+    put("sourceFormat", entry.sourceFormat); put("forceStaticAllowed", entry.forceStaticAllowed); put("forcedStatic", entry.forcedStatic); put("outputExists", entry.outputExists); put("stillOnly", entry.stillOnly); put("primaryOnly", entry.primaryOnly); put("copyOriginal", entry.copyOriginal); put("vivoId", entry.vivoId); put("vivoPartner", entry.vivoPartner); put("metadataRead", entry.metadataRead); put("motionOffset", entry.motionOffset); put("durationMs", entry.durationMs)
 }
 fun mediaFromJson(o: JSONObject) = MediaEntry(o.getString("source"), o.getString("root"), o.getString("relative"),
     o.getLong("size"), o.getLong("modified"), o.optInt("width"), o.optInt("height"), o.optString("kind", "图片"),
     if (o.has("reason") && !o.isNull("reason")) o.getString("reason") else null,
     if (o.has("taken") && !o.isNull("taken")) o.getString("taken") else null,
-    o.optBoolean("hasGps"), o.optLong("motionOffset"), o.optLong("durationMs"), o.optBoolean("metadataRead", true), o.optString("vivoId").takeIf { it.isNotBlank() && it != "null" }, o.optString("vivoPartner").takeIf { it.isNotBlank() && it != "null" }, o.optBoolean("copyOriginal"), o.optBoolean("primaryOnly"), o.optBoolean("stillOnly"), o.optBoolean("outputExists"), o.optBoolean("forceStaticAllowed"), o.optBoolean("forcedStatic"))
+    o.optBoolean("hasGps"), o.optLong("motionOffset"), o.optLong("durationMs"), o.optBoolean("metadataRead", true), o.optString("vivoId").takeIf { it.isNotBlank() && it != "null" }, o.optString("vivoPartner").takeIf { it.isNotBlank() && it != "null" }, o.optBoolean("copyOriginal"), o.optBoolean("primaryOnly"), o.optBoolean("stillOnly"), o.optBoolean("outputExists"), o.optBoolean("forceStaticAllowed"), o.optBoolean("forcedStatic"), o.optString("sourceFormat").takeIf { it.isNotBlank() && it != "null" })
 
 fun reportJson(state: BatchState) = JSONObject().apply {
     put("id", state.id); put("startedAt", state.startedAt); put("endedAt", state.endedAt); put("profile", state.profile); put("prefix", state.prefix)

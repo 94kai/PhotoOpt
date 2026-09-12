@@ -31,7 +31,7 @@ object TaskHistory {
             runCatching {
                 val report = parseReport(JSONObject(file.readText()))
                 if (report.running && report.id != BatchProgress.state.value.takeIf { it.running }?.id) {
-                    val stopped = report.copy(running = false, cancelled = true, error = "任务被中断，已完成副本保留。重新扫描即可处理剩余文件。",
+                    val stopped = report.copy(running = false, cancelled = true, error = "任务被中断，已完成小图保留。重新扫描即可处理剩余文件。",
                         results = report.results.map { if (it.state == "待处理") it.copy(state = "未处理", detail = "任务中断，尚未记录完成") else it })
                     write(context, stopped)
                     stopped

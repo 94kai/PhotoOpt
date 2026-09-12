@@ -8,8 +8,9 @@ import java.io.RandomAccessFile
 data class MarkerFinding(val path: String, val state: String, val markers: List<String> = emptyList(), val note: String = "") {
     val action: String get() = markers.joinToString(" ").let {
         when {
+            it.contains("hdrGainMapRemoved=true") -> "已移除 HDR 增益图"
             it.contains("action=copy") -> "原样复制"
-            it.contains("forcedStatic=true") -> "强制转普通图片"
+            it.contains("forcedStatic=true") -> "兼容模式"
             it.contains("motionRemoved=true") -> "实况转静态照片"
             it.contains("primaryOnly=true") -> "仅主图"
             it.contains("vivo-pair=B") || it.contains("experimental=vivo-pair") -> "vivo 实况处理"
@@ -32,13 +33,14 @@ object MarkerInspector {
             runCatching(block).onFailure { errors.add("$location：${it.message ?: "读取失败"}") }
         }
         if (!file.isFile || !file.canRead()) return MarkerFinding(file.path, "读取失败", note = "文件不存在或无法读取")
-        when (file.extension.lowercase()) {
+        val format = runCatching { MediaHeader.imageFormat(file) }.getOrNull() ?: file.extension.lowercase()
+        when (format) {
             "jpg", "jpeg", "webp", "heic", "heif", "dng" -> {
                 read("EXIF") { ExifInterface(file).let { exif ->
                     markers += extract(exif.getAttribute(ExifInterface.TAG_USER_COMMENT).orEmpty(), "EXIF UserComment")
                     markers += extract(exif.getAttribute(ExifInterface.TAG_XMP).orEmpty(), "XMP")
                 } }
-                if (file.extension.lowercase() in setOf("jpg", "jpeg")) read("JPEG 元数据") {
+                if (format in setOf("jpg", "jpeg")) read("JPEG 元数据") {
                     RandomAccessFile(file, "r").use { r ->
                         require(r.readUnsignedShort() == 0xffd8) { "不是 JPEG" }
                         while (r.filePointer + 2 <= r.length()) {
