@@ -4,6 +4,11 @@
 
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
@@ -19,9 +24,12 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.PhotoOpt"
         tools:targetApi="31">
+        <meta-data android:name="com.amap.api.v2.apikey" android:value="${AMAP_API_KEY}" />
         <service android:name=".ProcessingService" android:exported="false"
             android:foregroundServiceType="dataSync" />
         <activity android:name=".MaintenanceActivity" android:exported="false" />
+        <activity android:name=".QuickLocationActivity" android:exported="false" />
+        <activity android:name=".LocationTagActivity" android:exported="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

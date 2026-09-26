@@ -1,8 +1,23 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
+
+val reusableDebugSigning = Properties().apply {
+    val propertiesFile = rootProject.file("signing/photoopt-debug.properties")
+    if (propertiesFile.isFile) propertiesFile.inputStream().use(::load)
+}
+val localProperties = Properties().apply {
+    val propertiesFile = rootProject.file("local.properties")
+    if (propertiesFile.isFile) propertiesFile.inputStream().use(::load)
+}
+val amapApiKey = providers.gradleProperty("AMAP_API_KEY").orNull
+    ?: System.getenv("AMAP_API_KEY")
+    ?: localProperties.getProperty("AMAP_API_KEY")
+    ?: ""
 
 android {
     namespace = "com.xk.photoopt"
@@ -12,10 +27,19 @@ android {
         applicationId = "com.xk.photoopt"
         minSdk = 31
         targetSdk = 35
-        versionCode = 44
-        versionName = "1.9.7"
+        versionCode = 49
+        versionName = "1.10.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        manifestPlaceholders["AMAP_API_KEY"] = amapApiKey
+        buildConfigField("String", "AMAP_API_KEY", "\"$amapApiKey\"")
+    }
+
+    signingConfigs.getByName("debug").apply {
+        reusableDebugSigning.getProperty("storeFile")?.let { storeFile = rootProject.file(it) }
+        reusableDebugSigning.getProperty("storePassword")?.let { storePassword = it }
+        reusableDebugSigning.getProperty("keyAlias")?.let { keyAlias = it }
+        reusableDebugSigning.getProperty("keyPassword")?.let { keyPassword = it }
     }
 
     buildTypes {
@@ -36,6 +60,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -55,6 +80,7 @@ dependencies {
     implementation("androidx.media3:media3-transformer:1.5.1")
     implementation("androidx.media3:media3-effect:1.5.1")
     implementation("androidx.media3:media3-muxer:1.5.1")
+    implementation("com.amap.api:3dmap-location-search:10.1.200_loc6.4.9_sea9.7.4")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
