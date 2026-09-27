@@ -27,8 +27,8 @@ android {
         applicationId = "com.xk.photoopt"
         minSdk = 31
         targetSdk = 35
-        versionCode = 49
-        versionName = "1.10.4"
+        versionCode = 51
+        versionName = "1.10.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["AMAP_API_KEY"] = amapApiKey

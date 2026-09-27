@@ -121,7 +121,6 @@ fun PhotoApp(vm: PhotoViewModel = viewModel()) {
                     Text("PhotoOpt", color = Muted, fontSize = 10.sp)
                 }
                 IconButton(onClick = { donation = true }) { Icon(Icons.Rounded.LocalCafe, "打赏支持", tint = Teal) }
-                IconButton(onClick = { context.startActivity(Intent(context, LocationTagActivity::class.java)) }) { Icon(Icons.Rounded.AddLocationAlt, "批量添加位置", tint = Teal) }
                 IconButton(onClick = { context.startActivity(Intent(context, MaintenanceActivity::class.java)) }) { Icon(Icons.Rounded.Build, "运维工具", tint = Muted) }
                 IconButton(onClick = { about = true }) { Icon(Icons.Rounded.Info, "使用说明", tint = Muted) }
             }
@@ -154,12 +153,12 @@ fun PhotoApp(vm: PhotoViewModel = viewModel()) {
                             }
                         }
                     }
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp), horizontalArrangement = Arrangement.SpaceAround) {
-                        listOf(Triple("准备", Icons.Rounded.Dashboard, 0), Triple("文件", Icons.Rounded.PhotoLibrary, 1), Triple("结果", Icons.Rounded.TaskAlt, 2)).forEach { (label, icon, index) ->
-                            Surface(onClick = { vm.tab = index }, shape = RoundedCornerShape(14.dp), color = if (vm.tab == index) Color(0xFFEDF3E8) else Color.Transparent) {
-                                Row(Modifier.padding(horizontal = 22.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(icon, null, Modifier.size(18.dp), tint = if (vm.tab == index) Teal else Muted)
-                                    Spacer(Modifier.width(7.dp)); Text(label, fontSize = 12.sp, color = if (vm.tab == index) Teal else Muted, fontWeight = FontWeight.Medium)
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        listOf(Triple("准备", Icons.Rounded.Dashboard, 0), Triple("文件", Icons.Rounded.PhotoLibrary, 1), Triple("结果", Icons.Rounded.TaskAlt, 2), Triple("位置", Icons.Rounded.AddLocationAlt, 3)).forEach { (label, icon, index) ->
+                            Surface(onClick = { vm.tab = index }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(14.dp), color = if (vm.tab == index) Color(0xFFEDF3E8) else Color.Transparent) {
+                                Column(Modifier.padding(vertical = 7.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(icon, null, Modifier.size(19.dp), tint = if (vm.tab == index) Teal else Muted)
+                                    Spacer(Modifier.height(2.dp)); Text(label, fontSize = 10.sp, color = if (vm.tab == index) Teal else Muted, fontWeight = FontWeight.Medium)
                                 }
                             }
                         }
@@ -172,15 +171,17 @@ fun PhotoApp(vm: PhotoViewModel = viewModel()) {
             when (vm.tab) {
                 0 -> SetupScreen(vm, access, busy, ::requestAccess,
                     { if (access) directoryPicker.launch(null) else requestAccess() },
-                    { if (access) imagePicker.launch(arrayOf("image/*", "video/*")) else requestAccess() },
-                    { context.startActivity(Intent(context, QuickLocationActivity::class.java)) },
-                    { context.startActivity(Intent(context, LocationTagActivity::class.java)) })
+                    { if (access) imagePicker.launch(arrayOf("image/*", "video/*")) else requestAccess() })
                 1 -> FilesScreen(vm, busy, onPreview = { detail = it }, onLimitations = { limitations = true }, onScan = {
                     if (!access) requestAccess() else if (!locationAccess) permissions.launch(arrayOf(Manifest.permission.ACCESS_MEDIA_LOCATION)) else vm.scan()
                 })
                 2 -> HistoryScreen(history, batch, vm::stop, vm::deleteTask, { donation = true }) {
                     exportingTask = it; exportPicker.launch("PhotoOpt-${it.startedAt}.json")
                 }
+                3 -> LocationToolsScreen(
+                    recordLocation = { context.startActivity(Intent(context, QuickLocationActivity::class.java)) },
+                    addPhotoLocation = { context.startActivity(Intent(context, LocationTagActivity::class.java)) }
+                )
             }
 
         }
@@ -269,7 +270,38 @@ fun PhotoApp(vm: PhotoViewModel = viewModel()) {
 }
 
 @Composable
-private fun SetupScreen(vm: PhotoViewModel, access: Boolean, busy: Boolean, grant: () -> Unit, addFolder: () -> Unit, addImages: () -> Unit, recordLocation: () -> Unit, addPhotoLocation: () -> Unit) {
+private fun LocationToolsScreen(recordLocation: () -> Unit, addPhotoLocation: () -> Unit) {
+    val context = LocalContext.current
+    val savedCount = remember { SavedLocationStore.load(context).size }
+    Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Text("位置", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+        Text("记录常用地点，或批量给照片补充位置信息。", color = Muted, fontSize = 13.sp)
+        Surface(onClick = recordLocation, shape = RoundedCornerShape(22.dp), color = Color.White, shadowElevation = 2.dp) {
+            Row(Modifier.fillMaxWidth().padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+                Surface(shape = RoundedCornerShape(16.dp), color = Color(0xFFEDF3E8)) { Icon(Icons.Rounded.MyLocation, null, Modifier.padding(13.dp).size(25.dp), tint = Teal) }
+                Spacer(Modifier.width(14.dp)); Column(Modifier.weight(1f)) {
+                    Text("记录当前位置", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                    Text("获取坐标、填写备注并保存", color = Muted, fontSize = 11.sp)
+                }
+                Icon(Icons.Rounded.ChevronRight, null, tint = Muted)
+            }
+        }
+        Surface(onClick = addPhotoLocation, shape = RoundedCornerShape(22.dp), color = Color.White, shadowElevation = 2.dp) {
+            Row(Modifier.fillMaxWidth().padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+                Surface(shape = RoundedCornerShape(16.dp), color = Color(0xFFEDF3E8)) { Icon(Icons.Rounded.AddLocationAlt, null, Modifier.padding(13.dp).size(25.dp), tint = Teal) }
+                Spacer(Modifier.width(14.dp)); Column(Modifier.weight(1f)) {
+                    Text("给照片添加位置", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                    Text("选择目录、筛选照片并批量写入 GPS", color = Muted, fontSize = 11.sp)
+                }
+                Icon(Icons.Rounded.ChevronRight, null, tint = Muted)
+            }
+        }
+        if (savedCount > 0) Text("已保存 $savedCount 个常用位置，可在给照片添加位置时直接选用。", color = Teal, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 4.dp))
+    }
+}
+
+@Composable
+private fun SetupScreen(vm: PhotoViewModel, access: Boolean, busy: Boolean, grant: () -> Unit, addFolder: () -> Unit, addImages: () -> Unit) {
     val context = LocalContext.current
     LazyColumn(contentPadding = PaddingValues(start = 24.dp, end = 24.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
         item { Hero() }
@@ -280,21 +312,6 @@ private fun SetupScreen(vm: PhotoViewModel, access: Boolean, busy: Boolean, gran
                     Column(Modifier.weight(1f)) { Text("连接你的本地照片", fontWeight = FontWeight.SemiBold, fontSize = 14.sp); Text("允许文件访问，创建同级小图目录", fontSize = 11.sp, color = Muted) }
                     TextButton(onClick = grant) { Text("允许") }
                 }
-            }
-        }
-        item {
-            SectionHeading("位置", "位置工具", "记录后可反复使用")
-            Spacer(Modifier.height(12.dp))
-            WhiteCard {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(onClick = recordLocation, modifier = Modifier.weight(1f), shape = RoundedCornerShape(16.dp), contentPadding = PaddingValues(vertical = 14.dp)) {
-                        Icon(Icons.Rounded.MyLocation, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("记录当前位置", fontSize = 13.sp)
-                    }
-                    OutlinedButton(onClick = addPhotoLocation, modifier = Modifier.weight(1f), shape = RoundedCornerShape(16.dp), contentPadding = PaddingValues(vertical = 14.dp)) {
-                        Icon(Icons.Rounded.AddLocationAlt, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("给照片定位", fontSize = 13.sp)
-                    }
-                }
-                Spacer(Modifier.height(10.dp)); Text("给当前位置加备注保存；之后批量处理照片时可以直接选用。", fontSize = 11.sp, color = Muted)
             }
         }
         item {
