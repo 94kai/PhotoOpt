@@ -263,9 +263,7 @@ private fun AmapPrivacyScreen(back: () -> Unit, agree: () -> Unit) {
 @Composable
 private fun LocationTagScreen(back: () -> Unit, vm: LocationTagViewModel = viewModel()) {
     val context = LocalContext.current
-    val directoryPreferences = remember { context.getSharedPreferences("location-directories", ComponentActivity.MODE_PRIVATE) }
-    var lastDirectoryUri by remember { mutableStateOf(directoryPreferences.getString("last-uri", null)) }
-    var lastDirectoryName by remember { mutableStateOf(directoryPreferences.getString("last-name", null)) }
+    var recentDirectories by remember { mutableStateOf(RecentDirectoryStore.load(context)) }
     var map by remember { mutableStateOf<AMap?>(null) }
     var selectedPoint by remember { mutableStateOf(LatLng(39.908823, 116.397470)) }
     var selectedName by remember { mutableStateOf("地图中心位置") }
@@ -315,11 +313,10 @@ private fun LocationTagScreen(back: () -> Unit, vm: LocationTagViewModel = viewM
         if (uri != null) {
             runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
             vm.loadDirectory(uri)
-            lastDirectoryUri = uri.toString()
-            lastDirectoryName = runCatching {
+            val directoryName = runCatching {
                 context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
-            }.getOrNull() ?: Uri.decode(DocumentsContract.getTreeDocumentId(uri)).substringAfterLast('/').substringAfterLast(':').ifBlank { "上次目录" }
-            directoryPreferences.edit().putString("last-uri", lastDirectoryUri).putString("last-name", lastDirectoryName).apply()
+            }.getOrNull() ?: Uri.decode(DocumentsContract.getTreeDocumentId(uri)).substringAfterLast('/').substringAfterLast(':').ifBlank { "照片目录" }
+            recentDirectories = RecentDirectoryStore.add(context, uri.toString(), directoryName)
             showMap = false
         } else vm.directorySelectionFailed()
     }
@@ -365,8 +362,15 @@ private fun LocationTagScreen(back: () -> Unit, vm: LocationTagViewModel = viewM
                     onlyWithoutGps = onlyWithoutGps,
                     onFilterChange = { onlyWithoutGps = it },
                     chooseDirectory = { directoryPicker.launch(null) },
-                    lastDirectoryName = lastDirectoryName,
-                    openLastDirectory = lastDirectoryUri?.let { saved -> ({ vm.loadDirectory(Uri.parse(saved)) }) },
+                    recentDirectories = recentDirectories,
+                    openDirectory = { directory ->
+                        vm.loadDirectory(Uri.parse(directory.uri))
+                        recentDirectories = RecentDirectoryStore.touch(context, directory.uri)
+                    },
+                    deleteDirectory = { directory ->
+                        recentDirectories = RecentDirectoryStore.delete(context, directory.uri)
+                        runCatching { context.contentResolver.releasePersistableUriPermission(Uri.parse(directory.uri), Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
+                    },
                     next = { showMap = true }
                 )
             } else {
@@ -472,23 +476,36 @@ private fun DirectoryPhotoSelector(
     onlyWithoutGps: Boolean,
     onFilterChange: (Boolean) -> Unit,
     chooseDirectory: () -> Unit,
-    lastDirectoryName: String?,
-    openLastDirectory: (() -> Unit)?,
+    recentDirectories: List<RecentDirectory>,
+    openDirectory: (RecentDirectory) -> Unit,
+    deleteDirectory: (RecentDirectory) -> Unit,
     next: () -> Unit
 ) {
     val visible = remember(vm.photos, onlyWithoutGps) { if (onlyWithoutGps) vm.photos.filterNot { it.hasGps } else vm.photos }
     Column(Modifier.fillMaxSize()) {
         if (!vm.directorySelected && !vm.loadingDirectory) {
-            Column(Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Icon(Icons.Rounded.FolderOpen, null, tint = Teal, modifier = Modifier.size(48.dp))
                 Spacer(Modifier.height(12.dp)); Text("先选择照片目录", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(6.dp)); Text("会读取目录内的图片和 GPS 状态，不会修改文件。", color = Muted)
-                Spacer(Modifier.height(18.dp)); Button(onClick = chooseDirectory) { Text("选择目录") }
-                if (openLastDirectory != null) {
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedButton(onClick = openLastDirectory) {
-                        Icon(Icons.Rounded.History, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp))
-                        Text("使用上次目录：${lastDirectoryName ?: "照片目录"}", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(16.dp)); Button(onClick = chooseDirectory, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Rounded.CreateNewFolder, null); Spacer(Modifier.width(7.dp)); Text("选择新目录") }
+                if (recentDirectories.isNotEmpty()) {
+                    Spacer(Modifier.height(18.dp)); Text("历史目录", modifier = Modifier.fillMaxWidth(), fontWeight = FontWeight.SemiBold)
+                    Text("点击快速打开；删除只移除记录，不会删除照片或文件夹。", modifier = Modifier.fillMaxWidth(), fontSize = 10.sp, color = Muted)
+                    Spacer(Modifier.height(6.dp))
+                    LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(recentDirectories, key = { it.uri }) { directory ->
+                            Surface(onClick = { openDirectory(directory) }, shape = RoundedCornerShape(16.dp), color = Color.White, shadowElevation = 1.dp) {
+                                Row(Modifier.fillMaxWidth().padding(start = 14.dp, top = 8.dp, bottom = 8.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Rounded.Folder, null, tint = Teal); Spacer(Modifier.width(10.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(directory.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
+                                        Text(Uri.decode(directory.uri).substringAfterLast('/').substringAfterLast(':'), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 10.sp, color = Muted)
+                                    }
+                                    IconButton(onClick = { deleteDirectory(directory) }) { Icon(Icons.Rounded.DeleteOutline, "删除目录记录", tint = MaterialTheme.colorScheme.error) }
+                                }
+                            }
+                        }
                     }
                 }
                 vm.directoryError?.let { Spacer(Modifier.height(10.dp)); Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }
@@ -594,7 +611,7 @@ private fun moveToGps(location: Location, move: (LatLng, Double, String) -> Unit
     move(wgs84ToGcj02(LatLng(location.latitude, location.longitude)), 17.0, "当前位置")
 }
 
-private fun wgs84ToGcj02(point: LatLng): LatLng {
+internal fun wgs84ToGcj02(point: LatLng): LatLng {
     if (outsideChina(point.latitude, point.longitude)) return point
     var latitudeOffset = transformLatitude(point.longitude - 105.0, point.latitude - 35.0)
     var longitudeOffset = transformLongitude(point.longitude - 105.0, point.latitude - 35.0)

@@ -29,6 +29,7 @@
             android:foregroundServiceType="dataSync" />
         <activity android:name=".MaintenanceActivity" android:exported="false" />
         <activity android:name=".QuickLocationActivity" android:exported="false" />
+        <activity android:name=".SavedLocationMapActivity" android:exported="false" />
         <activity android:name=".LocationTagActivity" android:exported="false" />
         <activity
             android:name=".MainActivity"

@@ -1,6 +1,7 @@
 package com.xk.photoopt
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationManager
@@ -12,6 +13,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowBack
@@ -99,7 +101,9 @@ private fun QuickLocationScreen(back: () -> Unit) {
                 if (savedLocations.isNotEmpty()) {
                     HorizontalDivider(); Text("已保存的位置", fontWeight = FontWeight.SemiBold)
                     savedLocations.forEach { saved ->
-                        ListItem(headlineContent = { Text(saved.note) }, supportingContent = { Text(String.format(Locale.US, "%.6f, %.6f", saved.latitude, saved.longitude)) }, trailingContent = {
+                        ListItem(modifier = Modifier.clickable {
+                            context.startActivity(Intent(context, SavedLocationMapActivity::class.java).putExtra("latitude", saved.latitude).putExtra("longitude", saved.longitude).putExtra("note", saved.note))
+                        }, headlineContent = { Text(saved.note) }, supportingContent = { Text(String.format(Locale.US, "%.6f, %.6f · 点击查看地图", saved.latitude, saved.longitude)) }, trailingContent = {
                             TextButton(onClick = { SavedLocationStore.delete(context, saved.id); savedLocations = SavedLocationStore.load(context) }) { Text("删除") }
                         }, colors = ListItemDefaults.colors(containerColor = Paper))
                     }
